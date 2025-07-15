@@ -1,94 +1,132 @@
 [← Back to Learn](/learn/)
 
-# Package Management
+# Zig Package Management Guide
 
-Zig uses a decentralized, content-based package manager. No central registry exists.
+A comprehensive guide to understanding and using Zig’s decentralized, content-addressed package manager.
 
-## Content-based vs Version-based
+## Table of Contents
 
-Traditional package managers:
+- [Introduction](#introduction)
+- [Core Concepts](#core-concepts)
+- [Getting Started](#getting-started)
+- [Common Workflows](#common-workflows)
+- [Advanced Usage](#advanced-usage)
+- [Reference](#reference)
 
+## Introduction
+
+### What Makes Zig’s Package Manager Different?
+
+Most package managers rely on central registries and version numbers to manage dependencies. Zig takes a fundamentally different approach: it’s **decentralized** and **content-addressed**.
+
+**Traditional approach:**
+
+```json
+{
+  "lodash": "^4.17.21",  // Might resolve to 4.17.22 tomorrow
+  "react": "~18.2.0"     // Could be any 18.2.x version
+}
 ```
-"lodash": "^4.17.21"  # Might get 4.17.22 tomorrow
-"react": "~18.2.0"    # Could be any 18.2.x
-```
 
-Zig package manager:
+**Zig’s approach:**
 
 ```zig
-.lodash = .{
-    .url = "...",
-    .hash = "1220abc...",  # Always gets EXACTLY this code
-},
+.dependencies = .{
+    .lodash = .{
+        .url = "https://example.com/lodash-4.17.21.tar.gz",
+        .hash = "1220abc123...", // Always gets EXACTLY this code
+    },
+}
 ```
 
-In Zig, the hash IS the version. Change the code = change the hash = different package.
+### Key Benefits
 
-## Content-based addressing
+**Reproducible Builds**: The same `build.zig.zon` file always resolves to identical source code across all environments and developers.
 
-In Zig, packages are identified by their content hash, not by version numbers or URLs:
+**Enhanced Security**: Every package download is verified against its cryptographic hash, preventing tampering or unexpected changes.
 
-- **Hash = Identity**: The SHA-256 hash of the package contents is its unique identifier
-- **URLs are mirrors**: The same package (same hash) can be downloaded from multiple URLs
-- **Immutable packages**: If content at a URL changes, the hash won’t match and Zig will reject it
-- **Reproducible builds**: The same hash always produces the exact same code
+**No Single Point of Failure**: No central registry means packages can be hosted anywhere. The hash guarantees integrity regardless of the source.
 
-Example: If a package author accidentally updates their “v1.0.0” release:
+**Automatic Caching**: Packages are cached by their content hash, so multiple projects automatically share identical dependencies.
 
+## Core Concepts
+
+### Content-Addressed Packages
+
+In Zig, **the content hash IS the version**. When code changes, the hash changes, making it effectively a different package. This eliminates the ambiguity of semantic versioning ranges.
+
+```zig
+// These are completely different packages to Zig
+.my_lib_v1 = .{ .hash = "1220abc..." },  // Original version
+.my_lib_v2 = .{ .hash = "1220def..." },  // Updated version
 ```
-Your build.zig.zon: hash = "1220abc..."  (original v1.0.0)
-Updated tarball:    hash = "1220def..."  (modified v1.0.0)
-Result: Build fails! You're protected from surprise changes.
-```
 
-Benefits:
+### The Package Manifest
 
-- **Security**: Tampering is automatically detected
-- **Caching**: Packages with the same hash are safely shared across projects
-- **No version conflicts**: Different versions have different hashes
-- **Decentralized**: No central authority needed to manage packages
+Every Zig project with dependencies has a `build.zig.zon` file that serves as the package manifest. This file defines:
 
-## Adding dependencies
+- Project metadata (name, version)
+- Which files belong to the package
+- External dependencies
 
-Use `zig fetch` to add a dependency:
+### Dependencies vs Modules
+
+- **Dependency**: An external package listed in `build.zig.zon`
+- **Module**: A Zig code unit that can be imported with `@import()`
+- A dependency can expose one or more modules to your code
+
+### The Global Cache
+
+Zig maintains a global cache of all downloaded packages:
+
+- **Linux/macOS**: `~/.cache/zig/`
+- **Windows**: `%LOCALAPPDATA%\zig\cache\`
+
+Packages are stored by their hash, enabling automatic sharing across projects.
+
+## Getting Started
+
+### Your First Dependency
+
+Let’s add a real dependency to understand the workflow. We’ll use the popular Zig Zap web framework.
+
+**Step 1: Add the dependency**
 
 ```bash
-$ zig fetch --save https://github.com/user/package/archive/refs/tags/v1.0.0.tar.gz
+zig fetch --save https://github.com/zigzap/zap/archive/v0.1.7-pre.tar.gz
 ```
 
-This downloads the package and updates your `build.zig.zon` file.
+This command:
 
-**Important**: The hash that gets added identifies this exact code forever. Even if the maintainer updates the v1.0.0 tag (bad practice!), your build will fail rather than silently use different code.
+1. Downloads the package from the URL
+1. Computes its SHA-256 hash
+1. Creates or updates `build.zig.zon` with the dependency entry
 
-## build.zig.zon
+**Step 2: Examine the generated manifest**
 
-Every project with dependencies needs a `build.zig.zon` file:
+After running `zig fetch`, your `build.zig.zon` will look like this:
 
 ```zig
 .{
     .name = "my-project",
     .version = "0.1.0",
-    .minimum_zig_version = "0.14.0",
-    .fingerprint = "12345...", // Auto-generated, don't modify
-    
+    .paths = .{
+        "build.zig",
+        "build.zig.zon", 
+        "src",
+    },
     .dependencies = .{
         .zap = .{
             .url = "https://github.com/zigzap/zap/archive/v0.1.7-pre.tar.gz",
-            .hash = "1220abc...", // Use dummy hash first, then update
+            .hash = "122036b1948caa15c2c9054286b3057877f7b152a5102c9262511bf89554dc836ee5",
         },
-    },
-    
-    .paths = .{
-        "build.zig",
-        "build.zig.zon",
-        "src",
     },
 }
 ```
 
-## Using dependencies
+**Step 3: Wire up the dependency in your build script**
 
-In `build.zig`:
+Edit your `build.zig` to make the dependency available to your code:
 
 ```zig
 const std = @import("std");
@@ -96,280 +134,373 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    
-    const zap = b.dependency("zap", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    
+
     const exe = b.addExecutable(.{
         .name = "my-app",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    
-    exe.root_module.addImport("zap", zap.module("zap"));
-    
+
+    // Get the dependency and add its module to our executable
+    const zap_dep = b.dependency("zap", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("zap", zap_dep.module("zap"));
+
     b.installArtifact(exe);
 }
 ```
 
-In source code:
+**Step 4: Use the dependency in your code**
+
+Now you can import and use Zap in your Zig source files:
 
 ```zig
 const std = @import("std");
 const zap = @import("zap");
 
 pub fn main() !void {
-    // Use zap here
+    std.log.info("Using Zap framework!", .{});
+    // Use Zap functionality here
 }
 ```
 
-## Hash verification
+### Understanding the Manifest Structure
 
-When first adding a dependency, you’ll see:
+Let’s break down each part of `build.zig.zon`:
+
+```zig
+.{
+    // Project identification
+    .name = "my-project",        // Your package name
+    .version = "0.1.0",          // Informational only
+
+    // Package contents (what gets hashed)
+    .paths = .{
+        "build.zig",             // Build script
+        "build.zig.zon",         // This manifest
+        "src",                   // Source directory
+        "README.md",             // Documentation
+        // Add other files/directories as needed
+    },
+
+    // External dependencies
+    .dependencies = .{
+        .dependency_name = .{
+            .url = "https://...",    // Where to download
+            .hash = "1220...",       // Content verification
+        },
+    },
+}
+```
+
+**Important**: The `.paths` field determines what gets included when another project depends on yours. Only list files that are part of your package’s public interface.
+
+## Common Workflows
+
+### Adding Dependencies
+
+**Method 1: Using `zig fetch` (Recommended)**
 
 ```bash
-$ zig build
+# Automatically downloads, hashes, and updates build.zig.zon
+zig fetch --save https://github.com/user/package/archive/v1.0.0.tar.gz
+```
+
+**Method 2: Manual entry**
+
+```zig
+// Add to build.zig.zon dependencies
+.my_package = .{
+    .url = "https://github.com/user/package/archive/v1.0.0.tar.gz",
+    .hash = "", // Leave empty initially
+},
+```
+
+Then run `zig build` to get the correct hash from the error message.
+
+### Updating Dependencies
+
+To update to a newer version:
+
+```bash
+# Update existing dependency to new version
+zig fetch --save=package_name https://github.com/user/package/archive/v2.0.0.tar.gz
+```
+
+This updates both the URL and hash for the named dependency.
+
+### Local Development
+
+When developing a library alongside an application that uses it, use path dependencies:
+
+```zig
+.dependencies = .{
+    .my_local_lib = .{
+        .path = "../my-library-project",
+        // No .hash needed - changes are reflected immediately
+    },
+}
+```
+
+Path dependencies are perfect for:
+
+- Developing multiple related packages
+- Testing unreleased changes
+- Monorepo setups
+
+### Version Management Strategy
+
+Since Zig uses content hashes instead of semantic versions:
+
+**For Library Authors:**
+
+- Use clear, descriptive Git tags
+- Provide stable URLs for releases
+- Document breaking changes in release notes
+
+**For Library Users:**
+
+- Pin to specific release URLs
+- Use path dependencies during active development
+- Test thoroughly before updating hashes
+
+### Troubleshooting Hash Mismatches
+
+If you see a hash mismatch error:
+
+```
 error: hash mismatch: manifest declares
-122053da05e0c9348d91218ef015c8307749ef39f8e90c208a186e5f444e818672da
-but the fetched package has
+1220aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+but the fetched package has  
 122036b1948caa15c2c9054286b3057877f7b152a5102c9262511bf89554dc836ee5
 ```
 
-This happens because:
+This is a **security feature**, not a bug. It means:
 
-1. You provided a dummy/incorrect hash in `build.zig.zon`
-1. Zig fetched the package and computed its actual content hash
-1. The hashes didn’t match (this is expected on first add)
+1. The content at the URL has changed
+1. Someone may have updated the package
+1. The URL might point to different content
 
-Update `build.zig.zon` with the correct hash. This hash now permanently identifies this exact version of the code.
+**To fix:** Copy the correct hash from the error message into your `build.zig.zon`.
 
-## zig fetch options
+## Advanced Usage
 
-```bash
-$ zig fetch [options] <url>
-$ zig fetch [options] <path>
-```
+### Creating Your Own Package
 
-Options:
-
-- `--save` - Add to build.zig.zon
-- `--save=[name]` - Add with specific name
-- `--save-exact` - Store URL without normalization
-- `--global-cache-dir [path]` - Override cache location
-- `--debug-hash` - Print hash information
-
-### Sources
-
-- **GitHub releases**: `https://github.com/user/repo/archive/refs/tags/v1.0.0.tar.gz`
-- **Git repositories**: `git+https://github.com/user/repo#commit-hash`
-- **Local paths**: `../path/to/local/package` or `file:///absolute/path`
-- **Branch snapshots**: `https://github.com/user/repo/archive/refs/heads/main.tar.gz`
-
-## Dependency types
-
-### Remote dependencies
+Any Zig project can be a package. The key is exposing modules in your `build.zig`:
 
 ```zig
-.dependencies = .{
-    .json = .{
-        .url = "https://github.com/user/json-lib/archive/v1.0.0.tar.gz",
-        .hash = "1220abc...",  // This hash IS the package - URL is just where to get it
-    },
-}
-```
-
-### Local dependencies
-
-```zig
-.dependencies = .{
-    .local_lib = .{
-        .path = "./libs/local-lib",  // No hash - you control the content
-    },
-}
-```
-
-### Lazy dependencies
-
-```zig
-.dependencies = .{
-    .optional_lib = .{
-        .url = "https://github.com/user/optional/archive/main.tar.gz",
-        .hash = "1220abc...",
-        .lazy = true,  // Only fetch if actually used
-    },
-}
-```
-
-Even lazy dependencies are verified by hash when fetched.
-
-## Common workflows
-
-### Updating dependencies
-
-```bash
-# Fetch new version
-$ zig fetch --save https://github.com/user/repo/archive/refs/tags/v2.0.0.tar.gz
-
-# Clear cache if needed
-$ rm -rf ~/.cache/zig/*
-
-# Rebuild
-$ zig build
-```
-
-**Note**: You’re not just updating a version number - you’re switching to completely different content with a different hash. The old version remains cached and available to any project still using its hash.
-
-### Local development
-
-Use local paths during development:
-
-```zig
-.dependencies = .{
-    .my_lib = .{
-        // .url = "https://github.com/user/repo/archive/v1.0.0.tar.gz",
-        // .hash = "1220...",  // Hash for released version
-        .path = "../my-local-library",  // Direct path for development
-    },
-},
-```
-
-Switch between stable (hash-verified) and development (local) versions by commenting/uncommenting.
-
-### Creating packages
-
-In `build.zig`:
-
-```zig
+// In your library's build.zig
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    _ = b.addModule("my_library", .{
-        .root_source_file = b.path("src/main.zig"),
+    // Standard target and optimization setup
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // Create a module that other projects can import
+    const my_lib_module = b.addModule("my_library", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+
+    // Optional: create an executable for testing
+    const exe = b.addExecutable(.{
+        .name = "my_library_test",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("my_library", my_lib_module);
+
+    b.installArtifact(exe);
 }
 ```
 
-## Cache
-
-Packages are stored in:
-
-- Linux/macOS: `~/.cache/zig/`
-- Windows: `%LOCALAPPDATA%\zig\cache\`
-
-Content-based storage:
+**Package Layout:**
 
 ```
-~/.cache/zig/p/
-├── 1220abc.../  # One project uses "json v1.0"
-├── 1220def.../  # Another uses "json v2.0"
-└── 1220ghi.../  # Both use "http v1.5" (same hash = shared)
+my-library/
+├── build.zig          # Build script with module definition
+├── build.zig.zon      # Package manifest
+├── src/
+│   ├── lib.zig        # Main library interface
+│   └── main.zig       # Optional test executable
+└── README.md
 ```
 
-Each directory name is the content hash. Multiple projects using the same exact dependency share it automatically.
+### Lazy Dependencies
 
-Clear cache:
-
-```bash
-$ rm -rf ~/.cache/zig/*
-```
-
-Pre-fetch dependencies:
-
-```bash
-$ zig build --fetch
-```
-
-## Troubleshooting
-
-### Hash mismatch
-
-Update the hash in build.zig.zon with the correct value from the error message.
-
-**Why this happens**: Zig’s content-based system ensures you get exactly the code you expect. If the package author updates the release tarball (even with the same version tag), you’ll get a hash mismatch - protecting you from unexpected changes.
-
-### Network issues
-
-Check internet connection. For restricted environments, use git submodules:
-
-```bash
-$ git submodule add https://github.com/user/repo deps/repo
-```
-
-Then reference locally:
+Mark dependencies as lazy to avoid downloading them unless actually used:
 
 ```zig
 .dependencies = .{
-    .repo = .{
-        .path = "deps/repo",
+    .optional_feature = .{
+        .url = "https://...",
+        .hash = "1220...",
+        .lazy = true,  // Only downloaded if b.dependency() is called
     },
-},
-```
-
-### Missing dependencies
-
-Ensure dependency names match between build.zig and build.zig.zon.
-
-### Debug issues
-
-```bash
-$ zig build --verbose
-```
-
-## Advanced usage
-
-### Platform-specific dependencies
-
-```zig
-const target_os = target.result.os.tag;
-const platform_dep = switch (target_os) {
-    .windows => b.dependency("windows_lib", .{}),
-    .linux => b.dependency("linux_lib", .{}),
-    else => null,
-};
-
-if (platform_dep) |dep| {
-    exe.linkLibrary(dep.artifact("platform_lib"));
 }
 ```
 
-### Composite packages
+Use lazy dependencies for:
+
+- Platform-specific code
+- Optional features
+- Development-only tools
+
+### Composite Packages
+
+Create packages that re-export functionality from multiple dependencies:
 
 ```zig
+// In a "web_toolkit" package's build.zig
 pub fn build(b: *std.Build) void {
-    const json = b.dependency("json", .{});
-    const http = b.dependency("http", .{});
-    
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // Get sub-dependencies
+    const json_dep = b.dependency("json_parser", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const http_dep = b.dependency("http_client", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Create composite module
     _ = b.addModule("web_toolkit", .{
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/toolkit.zig"),
         .dependencies = &.{
-            .{ .name = "json", .module = json.module("json") },
-            .{ .name = "http", .module = http.module("http") },
+            .{ .name = "json", .module = json_dep.module("json_parser") },
+            .{ .name = "http", .module = http_dep.module("http_client") },
         },
     });
 }
 ```
 
-## build.zig.zon reference
+Users of `web_toolkit` can then access both JSON and HTTP functionality through a single import.
 
-### Required fields
+### Dependency Resolution and Conflicts
 
-- `.name` - Package name (valid Zig identifier, max 32 bytes)
-- `.paths` - Files and directories to include
+Zig handles dependency conflicts gracefully:
 
-### Optional fields
+**Diamond Dependencies:**
 
-- `.version` - Version string (advisory only)
-- `.minimum_zig_version` - Minimum compatible Zig version
-- `.dependencies` - Package dependencies
-- `.fingerprint` - Auto-generated unique identifier (don’t modify)
+```
+Your Project
+├── Library A (uses JSON v1.0)
+└── Library B (uses JSON v2.0)
+```
 
-### Hash format
+Both JSON versions coexist in the cache. Each library gets exactly the version it expects.
 
-- Multihash format: `1220` prefix (SHA256) + 64 hex digits
-- Computed from file contents after applying `.paths` inclusion rules
-- Files sorted by path before hashing
-- **Hash is the package identity** - URLs just tell where to find it
-- Same hash = same exact code, always
+**Duplicate Dependencies:**
+Multiple projects using the same hash automatically share the cached package.
+
+## Reference
+
+### Command Reference
+
+**Package Management Commands:**
+
+```bash
+# Add new dependency
+zig fetch --save <url>
+
+# Update existing dependency  
+zig fetch --save=<name> <new_url>
+
+# Download all dependencies without building
+zig build --fetch
+
+# Clean and rebuild
+zig build clean
+zig build
+```
+
+**Cache Management:**
+
+```bash
+# View cache location
+zig env
+
+# Clear entire cache (safe - will re-download as needed)
+rm -rf ~/.cache/zig/  # Linux/macOS
+rmdir /s %LOCALAPPDATA%\zig\cache\  # Windows
+```
+
+### build.zig.zon Schema
+
+```zig
+.{
+    // Required fields
+    .name = "string",           // Package name
+    .version = "string",        // Semantic version (informational)
+    
+    // Optional fields
+    .paths = .{                 // Files/dirs included in package hash
+        "string",               // File or directory path
+        // ...
+    },
+    
+    .dependencies = .{
+        .dep_name = .{
+            // Remote dependency
+            .url = "string",     // Download URL
+            .hash = "string",    // SHA-256 hash (required)
+            .lazy = bool,        // Optional: lazy loading
+        },
+        .local_dep = .{
+            // Local dependency
+            .path = "string",    // Relative path to local package
+        },
+    },
+}
+```
+
+### Cache Structure
+
+```
+~/.cache/zig/
+├── p/                      # Packages
+│   ├── 1220abc123.../      # Package by hash
+│   ├── 1220def456.../      # Another package
+│   └── ...
+├── h/                      # HTTP cache
+├── tmp/                    # Temporary files
+└── ...
+```
+
+Each package directory contains the extracted contents of the downloaded archive, exactly as specified by the hash.
+
+### Best Practices
+
+**For Library Authors:**
+
+- Keep `build.zig.zon` minimal and focused
+- Use clear module names in your `build.zig`
+- Provide stable release URLs
+- Document your public API thoroughly
+- Test with multiple Zig versions when possible
+
+**For Library Users:**
+
+- Pin to specific release URLs rather than branch URLs
+- Use descriptive dependency names in your manifest
+- Keep dependencies up to date with security patches
+- Use path dependencies during active development
+- Document your dependency choices
+
+**For Teams:**
+
+- Commit `build.zig.zon` to version control
+- Never commit the cache directory
+- Use consistent dependency naming across projects
+- Establish update policies for dependencies
+- Consider using a local mirror for critical dependencies
