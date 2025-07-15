@@ -1,7 +1,5 @@
 [← Back to Learn](/learn/)
 
-[← Back to Learn](/learn/)
-
 # Zig Package Management Guide
 
 A comprehensive guide to understanding and using Zig’s decentralized, content-addressed package manager.
